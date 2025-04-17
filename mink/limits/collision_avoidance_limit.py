@@ -150,6 +150,7 @@ class CollisionAvoidanceLimit(Limit):
         minimum_distance_from_collisions: float = 0.005,
         collision_detection_distance: float = 0.01,
         bound_relaxation: float = 0.0,
+        resolve_deep_penetrations: bool = False,
     ):
         """Initialize collision avoidance limit.
 
@@ -183,7 +184,13 @@ class CollisionAvoidanceLimit(Limit):
         self.bound_relaxation = bound_relaxation
         self.geom_id_pairs = self._construct_geom_id_pairs(geom_pairs)
         self.max_num_contacts = len(self.geom_id_pairs)
+        self.resolve_deep_penetrations = resolve_deep_penetrations
+        self.__in_collision = False
 
+    def in_collision(self) -> bool:
+        """Returns True if the limit is in collision."""
+        return self.__in_collision
+    
     def compute_qp_inequalities(
         self,
         configuration: Configuration,
@@ -198,11 +205,26 @@ class CollisionAvoidanceLimit(Limit):
             if contact.inactive:
                 continue
             hi_bound_dist = contact.dist
+            dist = hi_bound_dist - self.minimum_distance_from_collisions
+
+            # Case 1: Outside object trying to make contact
             if hi_bound_dist > self.minimum_distance_from_collisions:
                 dist = hi_bound_dist - self.minimum_distance_from_collisions
                 upper_bound[idx] = (self.gain * dist / dt) + self.bound_relaxation
+                self.__in_collision = False
+
+            # Case 2: Deep Penetration — Yo how are we here? Detangle
+            elif dist < -0.02 and self.resolve_deep_penetrations:
+                push_velocity = -1*(self.gain * dist / dt)
+                upper_bound[idx] = push_velocity + self.bound_relaxation
+                self.__in_collision = True
+
+            # Case 3: Just keep at upper bound
             else:
                 upper_bound[idx] = self.bound_relaxation
+                self.__in_collision = True
+
+            
             jac = compute_contact_normal_jacobian(
                 self.model, configuration.data, contact
             )
